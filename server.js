@@ -6,96 +6,95 @@ const axios = require('axios');
 const app = express();
 const port = process.env.PORT || 3000;
 
+// Base64 resimler büyük olduğu için limit yüksek olmalı
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '50mb' })); 
 
-// Global değişken: Çalışan modelin adını burada saklayacağız
 let ACTIVE_MODEL = null;
+const API_KEY = process.env.API_KEY;
 
-// API Key Kontrolü
-if (!process.env.API_KEY) {
-    console.error("❌ HATA: API Key .env dosyasında bulunamadı!");
+if (!API_KEY) {
+    console.error("❌ HATA: API Key yok!");
     process.exit(1);
 }
 
-// ---------------------------------------------------------
-// 🛠️ MÜHENDİSLİK ÇÖZÜMÜ: OTOMATİK MODEL BULUCU
-// ---------------------------------------------------------
+// Modeli Bulma Fonksiyonu (Aynı kalıyor)
 async function findActiveModel() {
-    console.log("🔍 Google Sunucularında senin için açık olan modeller aranıyor...");
-    
+    console.log("🔍 Model aranıyor...");
     try {
-        // Google'dan model listesini istiyoruz
-        const listUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${process.env.API_KEY}`;
+        const listUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${API_KEY}`;
         const response = await axios.get(listUrl);
+        const validModels = response.data.models.filter(m => 
+            m.supportedGenerationMethods?.includes("generateContent")
+        );
         
-        const models = response.data.models;
-        
-        // "generateContent" yeteneği olan modelleri filtrele
-        const validModels = models.filter(m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes("generateContent"));
-
-        if (validModels.length > 0) {
-            // İlk uygun modeli seç (Genelde gemini-pro veya gemini-1.5-flash olur)
-            // Listenin başındaki en güncelidir.
-            ACTIVE_MODEL = validModels[0].name; 
-            console.log(`✅ BAŞARILDI! Bulunan ve Seçilen Model: [ ${ACTIVE_MODEL} ]`);
-            console.log("🚀 Sunucu artık bu modeli kullanacak.");
-        } else {
-            console.error("❌ HATA: API Anahtarın geçerli ama hiçbir modele erişim izni yok.");
-            console.error("Lütfen Google AI Studio'da faturalandırma veya proje ayarlarını kontrol et.");
-        }
-
+        const imageModel = validModels.find(m => m.name.includes('flash'));
+        ACTIVE_MODEL = imageModel ? imageModel.name : "models/gemini-pro"; 
+        console.log(`✅ Model Seçildi: ${ACTIVE_MODEL}`);
     } catch (error) {
-        console.error("🚨 MODEL LİSTESİ ALINAMADI!");
-        console.error("Hata Detayı:", error.response ? error.response.data : error.message);
-        console.log("⚠️ Varsayılan olarak 'models/gemini-pro' denenecek...");
-        ACTIVE_MODEL = "models/gemini-pro";
+        console.log("⚠️ Varsayılan model: gemini-1.5-flash");
+        ACTIVE_MODEL = "models/gemini-1.5-flash";
     }
 }
-
-// Sunucu başlarken modeli bul
 findActiveModel();
 
-// ---------------------------------------------------------
-// API ENDPOINT
-// ---------------------------------------------------------
+// --- API ENDPOINT ---
 app.post('/api/fal-bak', async (req, res) => {
-    // Eğer model henüz bulunamadıysa uyarı ver
-    if (!ACTIVE_MODEL) {
-        return res.status(503).json({ success: false, error: "Sunucu hala uygun model arıyor, 5 saniye sonra tekrar dene." });
-    }
+    if (!ACTIVE_MODEL) return res.status(503).json({ error: "Sunucu hazırlanıyor..." });
 
     try {
-        const { message, type } = req.body;
-        console.log(`📥 İstek: "${message}" -> Kullanılan Model: ${ACTIVE_MODEL}`);
+        const { message, type, image } = req.body;
+        console.log(`📥 İstek: ${type} falı.`);
 
-        const promptText = `
-            Sen Kozmik Kahin'sin.
-            Kullanıcı sorusu: "${message}" (Tür: ${type})
-            Kısa, mistik ve eğlenceli cevap ver.
-        `;
+        // --- 🧠 ZEKİ PROMPT MÜHENDİSLİĞİ ---
+        // Burası işin sırrı. AI'ya önce kontrol etmesini söylüyoruz.
+        let promptText = "";
 
-        // Dinamik olarak seçtiğimiz modele istek atıyoruz
-        // URL yapısı: https://.../models/gemini-pro:generateContent
-        const url = `https://generativelanguage.googleapis.com/v1beta/${ACTIVE_MODEL}:generateContent?key=${process.env.API_KEY}`;
+        if (type === "kahve" && image) {
+            promptText = `
+                GÖREV: Bir Görüntü Doğrulama ve Fal Uzmanısın.
+                
+                ADIM 1: Önce bu görüntüyü analiz et.
+                Bu görüntüde aşağıdakilerden biri VAR MI?
+                - Bir kahve fincanı (içi veya dışı)
+                - Kahve telvesi şekilleri
+                - Kahve tabağı
+                
+                EĞER YOKSA (Örn: İnsan yüzü, manzara, kedi, bilgisayar, siyah ekran vb. ise):
+                Sadece tek bir kelime ile cevap ver: GECERSIZ_GORUNTU
+                
+                EĞER VARSA (Geçerli bir kahve falı fotoğrafıysa):
+                Sen mistik bir falcısın. Gördüğün sembolleri yorumla.
+                Kullanıcı Niyeti: "${message || 'Genel'}"
+                Yorumun mistik, akıcı ve 3 paragraf olsun.
+            `;
+        } else {
+            // Kahve değilse normal fal (Tarot/Astroloji vb.)
+            promptText = `Sen bir falcısın. Soru: "${message}". Tür: ${type}. Mistik ve kısa cevap ver.`;
+        }
 
-        const response = await axios.post(url, {
-            contents: [{ parts: [{ text: promptText }] }]
-        }, {
-            headers: { 'Content-Type': 'application/json' }
-        });
+        const contents = [];
+        if (image) {
+            contents.push({
+                inlineData: { data: image, mimeType: "image/jpeg" }
+            });
+        }
+        contents.push(promptText);
 
-        const botReply = response.data.candidates[0].content.parts[0].text;
-        console.log("✅ Cevap gönderildi.");
+        const url = `https://generativelanguage.googleapis.com/v1beta/${ACTIVE_MODEL}:generateContent?key=${API_KEY}`;
+        const response = await axios.post(url, { contents: [{ parts: contents }] });
+
+        const botReply = response.data.candidates[0].content.parts[0].text.trim(); // Boşlukları temizle
+        console.log("✅ AI Cevabı:", botReply.substring(0, 50) + "...");
         
         res.json({ success: true, reply: botReply });
 
     } catch (error) {
-        console.error("🚨 FAL BAKARKEN HATA:", error.response ? error.response.data : error.message);
-        res.status(500).json({ success: false, error: "Kozmik bağlantı hatası." });
+        console.error("Hata:", error.message);
+        res.status(500).json({ success: false, error: "Sunucu hatası." });
     }
 });
 
 app.listen(port, () => {
-    console.log(`✨ Kozmik Kahin Sunucusu Başladı (${port})`);
+    console.log(`✨ Sunucu ${port} portunda!`);
 });
