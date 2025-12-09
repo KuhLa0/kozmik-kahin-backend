@@ -5,21 +5,30 @@ require("dotenv").config();
 
 const app = express();
 
-// Limitler
+// Limitleri yüksek tutuyoruz (Resimler için)
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(cors());
 
-// API Key Kontrolü
+// API Anahtarı Kontrolü
 if (!process.env.GEMINI_API_KEY) {
-    console.error("❌ KRİTİK HATA: GEMINI_API_KEY bulunamadı!");
+    console.error("❌ HATA: GEMINI_API_KEY bulunamadı! Render Environment ayarlarını kontrol et.");
 }
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
+// --- AKILLI MODEL LİSTESİ ---
+// Sunucu sırasıyla bunları deneyecek. Hangisi çalışırsa cevabı ondan alacak.
+const MODELS_TO_TRY = [
+    "gemini-2.5-flash",       // Senin istediğin (Varsa dener)
+    "gemini-1.5-flash",       // En güncel hızlı model
+    "gemini-1.5-flash-latest",// Alternatif isim
+    "gemini-pro",             // En eski ve en garanti çalışan model (Fail-safe)
+];
+
 app.post('/api/fal-bak', async (req, res) => {
     try {
-        console.log("📥 İstek alındı.");
+        console.log("📥 Fal isteği alındı.");
         const { image } = req.body;
         const finalImage = image || req.body.base64Image;
 
@@ -27,80 +36,85 @@ app.post('/api/fal-bak', async (req, res) => {
             return res.status(400).json({ success: false, error: "Resim yok." });
         }
 
-        // --- MODEL SEÇİMİ ---
-        // En güncel ve hızlı model budur. 
-        // Eğer 2.5 kullanmak istiyorsan buraya yazabilirsin ama muhtemelen 404 verecektir.
-        const modelName = "gemini-1.5-flash"; 
+        const cleanBase64 = finalImage.replace(/^data:image\/\w+;base64,/, "");
         
-        const model = genAI.getGenerativeModel({ 
-            model: modelName,
-            generationConfig: { responseMimeType: "application/json" } 
-        });
-
+        // Bu promptu her model için kullanacağız
         const validationPrompt = `
-        Görev: Bu görüntüyü analiz et. Bu bir Türk kahvesi fincanı mı?
-        Kurallar:
-        1. Yanıt SADECE JSON formatında olsun.
-        2. Kahve değilse: {"valid": false, "reason": "Görüntü kahve falı değil."}
-        3. Kahve ise: {"valid": true, "yorum": "Mistik ve detaylı fal yorumun..."}
+        Görev: Bu fotoğrafı analiz et. Bu bir Türk kahvesi falı mı?
+        Cevap Formatı (Sadece JSON):
+        Eğer kahve değilse: {"valid": false, "reason": "Bu resim kahve falı değil."}
+        Eğer kahveyse: {"valid": true, "yorum": "Buraya fal yorumunu mistik bir dille yaz."}
+        Lütfen JSON dışında hiçbir şey yazma.
         `;
 
-        const cleanBase64 = finalImage.replace(/^data:image\/\w+;base64,/, "");
+        let finalResponse = null;
+        let usedModelName = "";
 
-        console.log(`🤖 Model (${modelName}) çalıştırılıyor...`);
-
-        const result = await model.generateContent([
-            validationPrompt,
-            { inlineData: { data: cleanBase64, mimeType: "image/jpeg" } },
-        ]);
-
-        const responseText = await result.response.text();
-        console.log("✅ Yanıt geldi:", responseText);
-
-        let parsedResponse;
-        try {
-            parsedResponse = JSON.parse(responseText);
-        } catch (e) {
-            parsedResponse = { valid: true, yorum: responseText };
-        }
-
-        if (parsedResponse.valid === false) {
-            return res.status(422).json({ 
-                success: false, 
-                isNotCoffee: true, 
-                error: parsedResponse.reason 
-            });
-        }
-
-        res.json({ success: true, response: parsedResponse.yorum });
-
-    } catch (error) {
-        console.error("💥 HATA OLUŞTU:", error.message);
-
-        // --- ÖZEL DEBUG BLOĞU ---
-        // Eğer "Not Found" hatası alırsak, sunucudaki mevcut modelleri listeleyelim
-        if (error.message.includes("404") || error.message.includes("not found")) {
-            console.log("🔍 Mevcut modeller listeleniyor...");
+        // --- MODEL DENEME DÖNGÜSÜ ---
+        for (const modelName of MODELS_TO_TRY) {
             try {
-                // Modelleri listeleme (eski sürüm kütüphanede bu fonksiyon olmayabilir)
-                // Ama kütüphaneyi güncellediğimiz için çalışmalı.
-                // Not: listModels bir async iterator döner, kullanımı biraz farklıdır.
-                console.log("⚠️ Render'daki kütüphane sürümü eski olabilir veya model adı hatalı.");
-                console.log("⚠️ Lütfen package.json dosyasında '@google/generative-ai' sürümünün '^0.21.0' olduğundan emin olun.");
-            } catch (listError) {
-                console.log("Modeller listelenemedi.");
+                console.log(`🔄 Deneniyor: ${modelName}...`);
+                
+                const model = genAI.getGenerativeModel({ model: modelName });
+                
+                const result = await model.generateContent([
+                    validationPrompt,
+                    { inlineData: { data: cleanBase64, mimeType: "image/jpeg" } }
+                ]);
+
+                const text = await result.response.text();
+                
+                // Eğer buraya geldiysek model çalıştı demektir!
+                console.log(`✅ BAŞARILI! Çalışan model: ${modelName}`);
+                finalResponse = text;
+                usedModelName = modelName;
+                break; // Döngüden çık, cevabı bulduk
+
+            } catch (err) {
+                console.log(`❌ ${modelName} başarısız oldu. Sıradakine geçiliyor...`);
+                // Hatayı loglayalım ama sunucuyu durdurmayalım
+                // console.log("Sebep:", err.message);
             }
         }
 
+        // --- SONUÇ KONTROLÜ ---
+        if (!finalResponse) {
+            throw new Error("Hiçbir model çalıştırılamadı. Kütüphane çok eski veya API Key yetkisiz.");
+        }
+
+        // JSON Parse İşlemi
+        let parsedData;
+        try {
+            // Temizlik yapalım (Bazen Markdown ```json``` içinde gelir)
+            const cleanJson = finalResponse.replace(/```json/g, "").replace(/```/g, "").trim();
+            parsedData = JSON.parse(cleanJson);
+        } catch (e) {
+            console.log("JSON parse edilemedi, düz metin gönderiliyor.");
+            parsedData = { valid: true, yorum: finalResponse };
+        }
+
+        // Kahve Kontrolü Sonucu
+        if (parsedData.valid === false) {
+            return res.status(422).json({ 
+                success: false, 
+                isNotCoffee: true, 
+                error: parsedData.reason 
+            });
+        }
+
+        res.json({ success: true, response: parsedData.yorum, debug_model: usedModelName });
+
+    } catch (error) {
+        console.error("💥 KESİN HATA:", error);
         res.status(500).json({ 
             success: false, 
-            error: error.message,
-            details: "Render'daki kütüphane eski olabilir. package.json güncellenmeli."
+            error: "Fal bakılamadı.", 
+            details: error.message 
         });
     }
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`🚀 Sunucu ${PORT} portunda çalışıyor.`);
+    console.log(`🚀 Sunucu ${PORT} portunda hazır.`);
 });
