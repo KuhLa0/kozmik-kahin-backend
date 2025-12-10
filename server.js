@@ -166,4 +166,13 @@ app.post('/api/fal-bak', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => { console.log(`🚀 Sunucu ${PORT} portunda hazır.`); });
+
+// Sunucuyu başlatıyoruz
+const server = app.listen(PORT, () => {
+    console.log(`🚀 Sunucu ${PORT} portunda hazır.`);
+});
+
+// --- KRİTİK DÜZELTME: ZAMAN AŞIMI SÜRESİNİ UZATMA ---
+// Varsayılan süre (120sn) bazen yetmeyebilir. Bunu 5 dakikaya (300.000 ms) çıkarıyoruz.
+// Böylece Gemini uzun uzun düşünse bile sunucu bağlantıyı koparmaz.
+server.setTimeout(300000);
