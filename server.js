@@ -17,13 +17,12 @@ if (!process.env.GEMINI_API_KEY) {
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// --- DÜZELTME: SADECE GÜNCEL VE ÇALIŞAN MODELLER ---
-// Eski modelleri sildik. Sadece 1.5 serisi hem metin hem resim için en iyisidir.
+// --- DÜZELTME: SADECE KESİN ÇALIŞAN KARARLI MODELLER ---
+// '-latest' eklerini kaldırdık, çünkü API bazen bunları bulamıyor.
 const MODELS_TO_TRY = [
-    "gemini-1.5-flash",          // En hızlı ve ekonomik
-    "gemini-1.5-pro",            // En zeki ve detaylı
-    "gemini-1.5-flash-latest",   // Flash'ın en son versiyonu
-    "gemini-1.5-pro-latest"      // Pro'nun en son versiyonu
+    "gemini-1.5-flash",  // En hızlı ve güvenilir
+    "gemini-1.5-pro",    // Daha zeki (Yedek)
+    "gemini-2.0-flash-exp" // Google'ın yeni deneysel modeli (Varsa çalışır)
 ];
 
 // --- MODEL AYARLARI ---
@@ -63,16 +62,16 @@ async function generateWithFallback(prompt, imagePart = null) {
             return text;
 
         } catch (error) {
-            // Hata mesajını temizleyip logluyoruz
-            const cleanError = error.message ? error.message.split('[')[0] : "Bilinmeyen hata";
-            console.warn(`❌ ${modelName} başarısız: ${cleanError}`);
+            // Hatayı temizleyip logluyoruz
+            const msg = error.message ? error.message.split('[')[0] : "Bilinmiyor";
+            console.warn(`❌ ${modelName} başarısız: ${msg}`);
             lastError = error;
             // Döngü kırılmaz, bir sonraki modele geçer...
         }
     }
     
     // Hepsi başarısız olursa
-    throw new Error(`Sunucu Hatası: Hiçbir model yanıt vermedi. Son hata: ${lastError?.message || 'Bilinmiyor'}`);
+    throw new Error(`Sunucu Hatası: Hiçbir model yanıt vermedi. (Son hata: ${lastError?.message})`);
 }
 
 
