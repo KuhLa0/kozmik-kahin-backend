@@ -12,41 +12,39 @@ app.use(cors());
 
 // 2. API Anahtarı Kontrolü
 if (!process.env.GEMINI_API_KEY) {
-    console.error("❌ HATA: GEMINI_API_KEY bulunamadı! Render ayarlarını kontrol et.");
+    console.error("❌ HATA: GEMINI_API_KEY bulunamadı!");
 }
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const MODELS_TO_TRY = ["gemini-1.5-flash", "gemini-2.5-flash", "gemini-pro"];
 
-// 3. AKILLI MODEL LİSTESİ
-const MODELS_TO_TRY = [
-    "gemini-2.5-flash",       
-    "gemini-1.5-flash",       
-    "gemini-1.5-flash-latest",
-    "gemini-pro",             
-];
+// --- MODEL AYARLARI (HIZ İÇİN) ---
+// Astrolojik hesaplamalar uzun sürebileceği için hız ayarı ekledik.
+const GENERATION_CONFIG = {
+    maxOutputTokens: 2000, // Çıktı uzunluğunu yeterli ama sınırlı tutar
+    temperature: 0.7,      // Tutarlı ve yaratıcı arasında denge
+};
 
-// --- MODEL ÇALIŞTIRMA FONKSİYONU ---
+
+// --- MODEL ÇALIŞTIRMA FONKSİYONU (Fallback Logic) ---
 async function generateWithFallback(prompt, imagePart = null) {
     let lastError = null;
-
     for (const modelName of MODELS_TO_TRY) {
         try {
             console.log(`🔄 Deneniyor: ${modelName}...`);
-            const model = genAI.getGenerativeModel({ model: modelName });
+            
+            // Hız ayarları (GENERATION_CONFIG) burada modele veriliyor!
+            const model = genAI.getGenerativeModel({ 
+                model: modelName,
+                generationConfig: GENERATION_CONFIG
+            });
             
             let result;
-            if (imagePart) {
-                result = await model.generateContent([prompt, imagePart]);
-            } else {
-                result = await model.generateContent(prompt);
-            }
-
-            const response = await result.response;
-            const text = response.text();
+            if (imagePart) result = await model.generateContent([prompt, imagePart]);
+            else result = await model.generateContent(prompt);
             
-            console.log(`✅ BAŞARILI! Çalışan Model: ${modelName}`);
-            return text;
-
+            const response = await result.response;
+            return response.text();
         } catch (error) {
             console.warn(`❌ ${modelName} başarısız oldu. Sebep: ${error.message.split('[')[0]}`);
             lastError = error;
@@ -62,135 +60,128 @@ app.post('/api/fal-bak', async (req, res) => {
         console.log("📥 İstek alındı.");
         
         const { 
-            image, selectedCards, falTuru, intention, spreadName, spreadStructure, // Tarot ve Kahve Parametreleri
-            astroData // Astroloji Parametresi {name, birthDate, birthPlace}
+            image, selectedCards, falTuru, intention, spreadName, spreadStructure,
+            astroData, astroType, userSign, userRising 
         } = req.body;
         
         const finalImage = image || req.body.base64Image;
         let aiResponse = "";
 
-        // ============================================================
-        // 🪐 SENARYO 1: ASTROLOJİ (DOĞUM HARİTASI) - YENİ!
-        // ============================================================
+        // ==========================================
+        // 🪐 SENARYO 1: ASTROLOJİ MODÜLÜ (Gelişmiş)
+        // ==========================================
         if (falTuru === 'astroloji') {
-            console.log(`🪐 Mod: ASTROLOJİ`);
-            
-            const { name, birthDate, birthPlace } = JSON.parse(astroData);
+            const data = JSON.parse(astroData || '{}');
+            console.log(`🪐 Astroloji: ${astroType}`);
 
-            const astroPrompt = `
-            GÖREV: Sen uzman bir Astrologsun. Aşağıdaki doğum bilgilerine göre kişinin "Natal Haritasını" (Doğum Haritası) çıkar ve yorumla.
+            let astroPrompt = "";
 
-            KİŞİ BİLGİLERİ:
-            - İsim: ${name}
-            - Doğum Yeri: ${birthPlace}
-            - Doğum Tarihi/Saati: ${birthDate}
-
-            İSTENEN ÇIKTI FORMATI (Lütfen bu formata sadık kal):
-            Cevabın iki bölümden oluşmalı ve aralarında "---AYIRAC---" kelimesi olmalı.
-
-            BÖLÜM 1: GEZEGEN KONUMLARI (Sadece JSON Formatında)
-            Lütfen şu JSON objesini doldur (Yorum katma, sadece veri):
-            {
-              "sun": "Burç Adı",
-              "moon": "Burç Adı",
-              "ascendant": "Burç Adı (Yükselen)",
-              "mercury": "Burç Adı",
-              "venus": "Burç Adı",
-              "mars": "Burç Adı",
-              "jupiter": "Burç Adı"
+            // 1. DOĞUM HARİTASI (Natal Chart)
+            if (astroType === 'natal') {
+                astroPrompt = `
+                GÖREV: Uzman Astrolog. Doğum haritası analizi.
+                BİLGİ: Kişi Adı: ${data.name}, Doğum Tarihi/Saati: ${data.birthDate}, Doğum Yeri: ${data.birthPlace}
+                
+                ÇIKTI FORMATI:
+                BÖLÜM 1: JSON (Sadece gezegen konumları)
+                { "sun": "Burç", "moon": "Burç", "ascendant": "Burç (Yükselen)", "mercury": "Burç", "venus": "Burç", "mars": "Burç", "jupiter": "Burç" }
+                ---AYIRAC---
+                BÖLÜM 2: DETAYLI YORUM (Markdown)
+                1. **Güneş (Öz Kimlik):** Karakter ve Yaşam Amacı.
+                2. **Yükselen (Maske):** Dış görünüş ve Yaşam Alanı. (Saati ve yeri dikkate alarak hesapla).
+                3. **Ay (Duygular):** İç dünya ve duygusal tepkiler.
+                4. **Aşk ve Kariyer:** Venüs ve Mars'ın etkileşimi.
+                5. **Element Dengesi:** Haritadaki Ateş, Su, Hava, Toprak dağılımı.
+                6. **Gelecek:** Önümüzdeki 1 ay için önemli transit etkileri.
+                `;
             }
-
-            ---AYIRAC---
-
-            BÖLÜM 2: DETAYLI YORUM (Markdown Formatında)
-            Aşağıdaki başlıkları kullanarak derin, mistik ve nokta atışı bir analiz yap:
-            1. **Güneş Burcun (Öz Kimliğin):** Kişinin temel karakteri ve yaşam amacı.
-            2. **Yükselen Burcun (Masken):** Dış dünyada nasıl algılandığı ve ilk izlenimi.
-            3. **Ay Burcun (Duyguların):** İç dünyası, duygusal ihtiyaçları ve bilinçaltı.
-            4. **Aşk ve İlişkiler (Venüs & Mars):** Sevgi dili, çekim gücü ve ilişki potansiyeli.
-            5. **Element Dengesi:** Haritasındaki ateş, toprak, hava, su dengesi.
-            6. **Gelecek Öngörüsü:** Önümüzdeki 1 ay için kısa bir astrolojik öngörü.
-
-            ÜSLUP: Samimi, güçlendirici ve mistik bir dil kullan.
-            `;
+            // 2. GÜNLÜK/HAFTALIK/AYLIK BURÇ YORUMU (Horoscope)
+            else if (astroType === 'horoscope') {
+                const periodText = data.period === 'weekly' ? 'Bu Hafta' : data.period === 'monthly' ? 'Bu Ay' : 'Bugün';
+                astroPrompt = `
+                GÖREV: ${data.sign} burcu için ${periodText} Astrolojik Yorumu.
+                
+                DİKKAT EDİLMESİ GEREKENLER:
+                1. Şu anki gökyüzü konumlarını (Ay fazı, Merkür Retrosu, Güneş tutulması, önemli açılar) mutlaka yoruma dahil et.
+                2. Bu transitlerin ${data.sign} burcuna özel etkisini anlat.
+                3. Aşk, Kariyer ve Sağlık başlıkları altında toparla.
+                4. Şanslı gün/sayı ver.
+                `;
+            }
+            // 3. AŞK UYUMU (Compatibility / Sinastri)
+            else if (astroType === 'compatibility') {
+                astroPrompt = `
+                GÖREV: İki burç arasındaki Aşk Uyumu (Sinastri) Analizi.
+                Kişi 1: ${data.name1} (${data.sign1})
+                Kişi 2: ${data.name2} (${data.sign2})
+                
+                ANALİZ:
+                1. Element ve Nitelik uyumu.
+                2. İlişkinin dinamiği (Tutku, Huzur, Zorluk).
+                3. Olası kriz noktaları ve nasıl aşılacağı.
+                4. Uzun vadeli gelecek potansiyeli (% Puan ver).
+                `;
+            }
+            // 4. ASTRO TAKVİM (Calendar)
+            else if (astroType === 'calendar') {
+                 // Frontend'den gelen hazır prompt'u kullanıyoruz (içinde JSON formatı var)
+                 astroPrompt = `
+                 GÖREV: Astroloji Takvimi Hazırlayıcısı. Önümüzdeki 4 hafta için en önemli Ay Fazlarını, Retroları ve Gezegen Geçişlerini listele.
+                 
+                 ÇIKTI FORMATI:
+                 BÖLÜM 1: JSON (Örnekteki gibi event listesi)
+                 ---AYIRAC---
+                 BÖLÜM 2: Bu dönem için genel yorum (Markdown)
+                 `;
+            }
 
             aiResponse = await generateWithFallback(astroPrompt, null);
         }
 
-        // ============================================================
-        // 🔮 SENARYO 2: TAROT FALI
-        // ============================================================
+        // ==========================================
+        // 🔮 SENARYO 2: TAROT (Entegreli)
+        // ==========================================
         else if (falTuru === 'tarot') {
-            console.log(`🔮 Mod: TAROT (${spreadName})`);
+            // Astro Entegrasyon Metni (userSign, userRising kullanılarak)
+            const context = userSign ? `KULLANICI BİLGİSİ: Bu kişi ${userSign} burcudur${userRising ? ` ve Yükseleni ${userRising}` : ''}. Yorumda kartları bu burcun özellikleri, element dengesi ve bugünkü gökyüzü enerjisiyle bağdaştır.` : "";
             
-            if (!selectedCards) throw new Error("Kart verisi eksik.");
-            let cards;
-            try { cards = JSON.parse(selectedCards); } catch (e) { cards = selectedCards; }
+            const cards = JSON.parse(selectedCards);
+            const cardDesc = cards.map((c, i) => `${i+1}. ${c.name} ${c.isReversed?'(TERS)':''}`).join('\n');
             
-            const cardDescriptions = cards.map((c, i) => 
-                `${i + 1}. Kart: ${c.name} ${c.isReversed ? '(TERS - Anlamı değişir)' : '(DÜZ)'}`
-            ).join('\n');
-
-            const tarotPrompt = `
-            GÖREV: Sen bilge, mistik ve derin sezgileri olan profesyonel bir Tarot yorumcususun.
-            AÇILIM TÜRÜ: ${spreadName || 'Özel Açılım'}
-            SORU / NİYET: "${intention}"
-
-            ÇEKİLEN KARTLAR:
-            ${cardDescriptions}
-
-            BU AÇILIMIN POZİSYON KURALLARI:
-            ${spreadStructure || 'Kartları sırasıyla yorumla.'}
-
-            YORUMLAMA REHBERİ:
-            1. Her kartı bulunduğu pozisyonun anlamına göre yorumla.
-            2. TERS (Reversed) kartların uyarıcı, geciktirici veya içsel yönlerini mutlaka belirt.
-            3. Kartlar arasındaki ilişkiyi ve hikayeyi bir bütün olarak anlat.
-            4. Cevabını Markdown formatında düzenle.
-            5. Kullanıcıya empatik ve yol gösterici ol.
+            const prompt = `
+            GÖREV: Profesyonel Tarot Yorumcusu. AÇILIM: ${spreadName}. NİYET: "${intention}".
+            KARTLAR: ${cardDesc}. KURALLAR: ${spreadStructure}.
+            ${context}
+            YORUM: Mistik, astrolojik referanslı ve detaylı yorumla.
             `;
-
-            aiResponse = await generateWithFallback(tarotPrompt, null);
-        } 
-
-        // ============================================================
-        // ☕ SENARYO 3: KAHVE FALI
-        // ============================================================
-        else {
-            console.log("☕ Mod: KAHVE FALI");
-
-            if (!finalImage) return res.status(400).json({ success: false, error: "Resim yok." });
-
-            const cleanBase64 = finalImage.replace(/^data:image\/\w+;base64,/, "");
-            const imagePart = { inlineData: { data: cleanBase64, mimeType: "image/jpeg" } };
-
-            const coffeePrompt = `
-            GÖREV: Bu Türk kahvesi fincanını detaylıca yorumla.
-            NİYET: "${intention || 'Genel Bakış'}"
-            
-            TALİMATLAR:
-            1. Fincandaki şekilleri benzetim yoluyla analiz et (Yol, hayvan, semboller vb.).
-            2. Aşk, Kariyer, Maddiyat ve Sağlık başlıkları altında yorumla.
-            3. Mistik, pozitif ve umut verici bir dil kullan.
-            `;
-
-            aiResponse = await generateWithFallback(coffeePrompt, imagePart);
+            aiResponse = await generateWithFallback(prompt, null);
         }
 
-        // Sonucu gönder
+        // ==========================================
+        // ☕ SENARYO 3: KAHVE (Entegreli)
+        // ==========================================
+        else {
+            if (!finalImage) return res.status(400).json({ error: "Resim yok." });
+            const cleanBase64 = finalImage.replace(/^data:image\/\w+;base64,/, "");
+            
+            // Astro Entegrasyon Metni (userSign kullanılarak)
+            const context = userSign ? `KULLANICI: ${userSign} burcu. Fal yorumunun sonunda "Bu fal, ${userSign} burcundaki Mars transitiyle de uyumlu..." gibi bir doğrulama cümlesi ekleyerek yorumu pekiştir.` : "";
+            
+            const prompt = `
+            GÖREV: Kahve Falı. NİYET: "${intention || 'Genel'}".
+            ${context}
+            TALİMAT: Şekilleri yorumla, mistik konuş.
+            `;
+            aiResponse = await generateWithFallback(prompt, { inlineData: { data: cleanBase64, mimeType: "image/jpeg" } });
+        }
+
         res.json({ success: true, response: aiResponse });
 
     } catch (error) {
         console.error("💥 KRİTİK HATA:", error.message);
-        res.status(500).json({ 
-            success: false, 
-            error: error.message,
-            details: error.toString() 
-        });
+        res.status(500).json({ success: false, error: error.message });
     }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`🚀 Sunucu ${PORT} portunda hazır.`);
-});
+app.listen(PORT, () => { console.log(`🚀 Sunucu ${PORT} portunda hazır.`); });
