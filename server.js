@@ -17,17 +17,20 @@ if (!process.env.GEMINI_API_KEY) {
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// --- MODEL LİSTESİ (SADECE STABİL VE YÜKSEK KOTALI OLANLAR) ---
-// Deneysel modelleri kaldırdık, 429 hatasını önlemek için en güvenliler kaldı.
+// --- DÜZELTME: VERSİYON NUMARALI GARANTİ MODELLER ---
+// Google bazen kısa isimleri bulamazsa, uzun versiyon isimlerini (001, 002) kesin bulur.
 const MODELS_TO_TRY = [
-    "gemini-1.5-flash",  // En hızlı ve yüksek kotalı
-    "gemini-1.5-pro"     // Daha zeki yedek
+    "gemini-1.5-flash",          // Standart Flash
+    "gemini-1.5-flash-001",      // Flash v1
+    "gemini-1.5-flash-002",      // Flash v2 (En Yeni)
+    "gemini-1.5-pro-001",        // Pro v1
+    "gemini-1.5-pro-002"         // Pro v2
 ];
 
 // --- MODEL AYARLARI ---
 const GENERATION_CONFIG = {
-    maxOutputTokens: 4000, // Detaylı analizler için uzunluk limiti
-    temperature: 0.7,      // Yaratıcılık dengesi
+    maxOutputTokens: 3000, 
+    temperature: 0.7,      
 };
 
 // --- MODEL ÇALIŞTIRMA FONKSİYONU ---
@@ -100,7 +103,7 @@ app.post('/api/fal-bak', async (req, res) => {
             const imagePart = { inlineData: { data: cleanBase64, mimeType: "image/jpeg" } };
 
             const astroContext = userSign 
-                ? `KULLANICI: ${userSign} burcu. El çizgilerini yorumlarken bu burcun karakteristik özelliklerini (Örn: Toprak grubuysa pratik eller) dikkate al.` 
+                ? `KULLANICI: ${userSign} burcu. El çizgilerini yorumlarken bu burcun karakteristik özelliklerini dikkate al.` 
                 : "";
 
             const palmPrompt = `
@@ -108,10 +111,10 @@ app.post('/api/fal-bak', async (req, res) => {
             GÖRÜNTÜ: Kullanıcının avuç içi fotoğrafı.
             
             TALİMATLAR:
-            Fotoğraftaki ana hatları tespit et ve detaylıca yorumla:
-            1. **Hayat Çizgisi:** Canlılık, sağlık ve yaşam enerjisi.
-            2. **Akıl Çizgisi:** Zeka, düşünce yapısı ve mantık.
-            3. **Kalp Çizgisi:** Duygular, aşk hayatı ve ilişkiler.
+            Fotoğraftaki ana hatları tespit et ve yorumla:
+            1. **Hayat Çizgisi:** Canlılık, sağlık.
+            2. **Akıl Çizgisi:** Zeka, düşünce yapısı.
+            3. **Kalp Çizgisi:** Duygular ve aşk hayatı.
             4. **Kader Çizgisi:** Kariyer ve yaşam yolu (Görünüyorsa).
             
             ${astroContext}
@@ -148,7 +151,7 @@ app.post('/api/fal-bak', async (req, res) => {
             BÖLÜM 1: JSON
             {
               "title": "Rüyaya Kısa Mistik Başlık",
-              "visual_keyword": "Rüyayı anlatan TEK İNGİLİZCE kelime veya kısa öbek (Örn: 'stormy ocean', 'flying bird'). Sadece görsel odaklı olsun.",
+              "visual_keyword": "Rüyayı anlatan TEK İNGİLİZCE kelime (Örn: 'stormy ocean').",
               "lucky_numbers": "3, 7, 21"
             }
             ---AYIRAC---
@@ -171,43 +174,16 @@ app.post('/api/fal-bak', async (req, res) => {
             let astroPrompt = "";
 
             if (astroType === 'natal') {
-                astroPrompt = `
-                GÖREV: Uzman Astrolog. Doğum haritası analizi.
-                BİLGİ: ${data.name}, ${data.birthDate}, ${data.birthPlace}.
-                ÖNEMLİ: Yükselen burcu saate göre hesapla.
-                
-                ÇIKTI: 
-                BÖLÜM 1: JSON (Sadece veri, Türkçe burç isimleri)
-                { "Sun": "Burç", "Moon": "Burç", "Ascendant": "Burç", "Mercury": "Burç", "Venus": "Burç", "Mars": "Burç", "Jupiter": "Burç", "Saturn": "Burç" }
-                ---AYIRAC---
-                BÖLÜM 2: Markdown Yorum (Güneş, Yükselen, Ay, Element Dengesi, Aşk, Kariyer, Gelecek).
-                `;
+                astroPrompt = `GÖREV: Uzman Astrolog. Doğum haritası analizi. BİLGİ: ${data.name}, ${data.birthDate}, ${data.birthPlace}. ÇIKTI: BÖLÜM 1: JSON { "sun": "Burç", "moon": "Burç", "ascendant": "Burç", "mercury": "Burç", "venus": "Burç", "mars": "Burç", "jupiter": "Burç", "saturn": "Burç" } ---AYIRAC--- BÖLÜM 2: Markdown Yorum.`;
             }
             else if (astroType === 'horoscope') {
-                const periodText = data.period === 'weekly' ? 'Bu Hafta' : data.period === 'monthly' ? 'Bu Ay' : 'Bugün';
-                astroPrompt = `
-                GÖREV: ${data.sign} burcu için ${periodText} Astrolojik Yorumu.
-                TARİH: Bugün.
-                ÇIKTI: 
-                BÖLÜM 1: JSON { "motto": "Kısa motivasyon cümlesi" }
-                ---AYIRAC---
-                BÖLÜM 2: Markdown Yorum (Gökyüzü Gündemi, Aşk, Kariyer, Sağlık).
-                `;
+                astroPrompt = `GÖREV: ${data.sign} burcu için ${data.period} yorumu. ÇIKTI: BÖLÜM 1: JSON { "motto": "..." } ---AYIRAC--- BÖLÜM 2: Markdown Yorum.`;
             }
             else if (astroType === 'compatibility') {
-                astroPrompt = `
-                GÖREV: Aşk Uyumu (Sinastri). Kişi 1: ${data.name1} (${data.sign1}), Kişi 2: ${data.name2} (${data.sign2}).
-                ANALİZ: Element uyumu, Ruhsal bağ, Çekim gücü, Zorluklar, Sonuç.
-                `;
+                astroPrompt = `Aşk Uyumu: ${data.name1} (${data.sign1}) ve ${data.name2} (${data.sign2}). Element ve nitelik uyumu.`;
             }
             else if (astroType === 'calendar') {
-                 astroPrompt = `
-                 GÖREV: Astroloji Takvimi. Önümüzdeki 30 günün Ay Fazları ve Retroları.
-                 ÇIKTI: 
-                 BÖLÜM 1: JSON { "events": [{ "date": "DD.MM", "title": "Olay", "type": "retro" }] } 
-                 ---AYIRAC--- 
-                 BÖLÜM 2: Genel Yorum.
-                 `;
+                 astroPrompt = `GÖREV: Astroloji Takvimi. ÇIKTI: BÖLÜM 1: JSON { "events": [...] } ---AYIRAC--- BÖLÜM 2: Yorum.`;
             }
             aiResponse = await generateWithFallback(astroPrompt, null);
         }
@@ -219,14 +195,7 @@ app.post('/api/fal-bak', async (req, res) => {
             const context = userSign ? `KULLANICI: ${userSign} burcu. Kartları bu burcun özellikleriyle harmanla.` : "";
             const cards = JSON.parse(selectedCards);
             const cardDesc = cards.map((c, i) => `${i+1}. ${c.name} ${c.isReversed?'(TERS)':''}`).join('\n');
-            
-            const prompt = `
-            GÖREV: Tarot Yorumcusu. AÇILIM: ${spreadName}. NİYET: "${intention}".
-            KARTLAR: ${cardDesc}.
-            KURALLAR: ${spreadStructure}.
-            ${context}
-            YORUM: Mistik, derin, detaylı ve astrolojik referanslı bir yorum yap. Markdown kullan.
-            `;
+            const prompt = `GÖREV: Tarot Yorumcusu. AÇILIM: ${spreadName}. NİYET: "${intention}". KARTLAR: ${cardDesc}. KURALLAR: ${spreadStructure}. ${context} Detaylı yorumla.`;
             aiResponse = await generateWithFallback(prompt, null);
         } 
 
@@ -236,14 +205,8 @@ app.post('/api/fal-bak', async (req, res) => {
         else {
             if (!finalImage) return res.status(400).json({ error: "Resim yok." });
             const cleanBase64 = finalImage.replace(/^data:image\/\w+;base64,/, "");
-            
-            const context = userSign ? `KULLANICI: ${userSign} burcu. Falın sonuna burçla ilgili bir doğrulama cümlesi ekle.` : "";
-            
-            const prompt = `
-            GÖREV: Kahve Falı. NİYET: "${intention || 'Genel'}".
-            ${context}
-            TALİMAT: Şekilleri yorumla, mistik konuş. Aşk, Kariyer, Sağlık olarak ayır.
-            `;
+            const context = userSign ? `KULLANICI: ${userSign} burcu. Falın sonunda burçla ilgili doğrulama yap.` : "";
+            const prompt = `GÖREV: Kahve Falı. NİYET: "${intention || 'Genel'}". ${context} Şekilleri yorumla, mistik konuş.`;
             aiResponse = await generateWithFallback(prompt, { inlineData: { data: cleanBase64, mimeType: "image/jpeg" } });
         }
 
