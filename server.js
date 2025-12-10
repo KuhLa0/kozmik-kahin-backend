@@ -187,7 +187,45 @@ app.post('/api/fal-bak', async (req, res) => {
             }
             aiResponse = await generateWithFallback(astroPrompt, null);
         }
+        // 🔢 SENARYO: NUMEROLOJİ (HİBRİT SİSTEM)
+        // ==========================================
+        else if (falTuru === 'numeroloji') {
+            const data = JSON.parse(astroData || '{}');
+            console.log(`🔢 Numeroloji: ${data.analysisType}`);
 
+            const prompt = `
+            GÖREV: Profesyonel Numerolog. Aşağıdaki hesaplanmış numeroloji değerlerine göre detaylı karakter ve kader analizi yap.
+            
+            KİŞİ BİLGİLERİ:
+            - İsim: ${data.name}
+            - Doğum Tarihi: ${data.birthDate}
+            
+            HESAPLANAN SAYILAR:
+            - Yaşam Yolu Sayısı (Life Path): ${data.lifePathNumber}
+            - Kader Sayısı (Expression): ${data.expressionNumber}
+            - Ruh Güdüsü (Soul Urge): ${data.soulUrgeNumber}
+            - Kişilik Sayısı (Personality): ${data.personalityNumber}
+
+            ANALİZ TÜRÜ: ${data.analysisType === 'year' ? '2024-2025 Kişisel Yıl Öngörüsü' : data.analysisType === 'name' ? 'İsim ve Kariyer Analizi' : 'Tam Kozmik Profil'}
+
+            İSTENEN ÇIKTI FORMATI:
+            BÖLÜM 1: JSON (Özet)
+            {
+              "motto": "Kişiyi anlatan kısa, gizemli bir cümle.",
+              "element": "Sayılarına göre baskın element (Ateş/Su/Hava/Toprak)",
+              "lucky_color": "Ruhsal rengi"
+            }
+            ---AYIRAC---
+            BÖLÜM 2: DETAYLI YORUM (Markdown)
+            1. **Yaşam Yolu (${data.lifePathNumber}):** Hayat amacı ve yolculuğu.
+            2. **Kader Sayısı (${data.expressionNumber}):** Doğustan gelen yetenekler.
+            3. **Ruhun Arzusu (${data.soulUrgeNumber}):** İç dünyada ne istiyor?
+            4. **Dış Maske (${data.personalityNumber}):** Başkaları onu nasıl görüyor?
+            5. **Kozmik Tavsiye:** Bu sayıların titreşimini yükseltmek için ne yapmalı?
+            `;
+
+            aiResponse = await generateWithFallback(prompt, null);
+        }
         // ==========================================
         // 🔮 SENARYO 4: TAROT
         // ==========================================
