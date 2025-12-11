@@ -9,81 +9,78 @@ const port = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
-// API Key Kontrolü
 if (!process.env.GEMINI_API_KEY) {
-    console.error("❌ HATA: .env dosyasında GEMINI_API_KEY bulunamadı!");
-    // Render environment variables kontrol edilmeli
+    console.error("❌ HATA: GEMINI_API_KEY yok.");
 }
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// --- AKILLI MODEL SİSTEMİ (GÜNCELLENDİ) ---
-// Model isimleri en güncel API standartlarına göre düzenlendi.
-const MODELS_TO_TRY = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"];
+// --- AKILLI MODEL SİSTEMİ: YENİ İSİMLERE GÖRE AYARLANDI ---
+// Resimli analiz yapacağımız için "flash-tts" veya "flash-lite" en iyi seçenek.
+// En stabil olanı en üstte deneyeceğiz.
+const TEXT_MODELS_TO_TRY = ["gemini-2.5-flash-lite", "gemini-2.5-flash"]; 
+const VISION_MODELS_TO_TRY = ["gemini-2.5-flash-tts", "gemini-2.5-flash-lite"];
 
-async function generateWithFallback(prompt, imagePart = null) {
+const FALLBACK_MESSAGE = "🌌 Kozmik hatlar aşırı yoğun. Lütfen 5 dakika sonra tekrar dene.";
+
+// --- GENEL FİZİK FONKSİYONU ---
+async function generateContent(prompt, isVision = false, imagePart = null) {
     let lastError = null;
+    
+    // Hangi listeyi deneyeceğimizi belirle
+    const modelList = isVision ? VISION_MODELS_TO_TRY : TEXT_MODELS_TO_TRY;
 
-    for (const modelName of MODELS_TO_TRY) {
+    for (const modelName of modelList) {
         try {
-            console.log(`🔄 Denenen Model: ${modelName}...`);
-            
-            // Yeni kütüphanede model alma yöntemi
+            console.log(`🔄 Denenen Model (${isVision ? 'Vision' : 'Text'}): ${modelName}...`);
             const model = genAI.getGenerativeModel({ model: modelName });
             
             let result;
-            if (imagePart) {
-                // Görsel Analiz
-                result = await model.generateContent([prompt, imagePart]);
+            if (isVision) {
+                 result = await model.generateContent([prompt, imagePart]);
             } else {
-                // Sadece Metin
-                result = await model.generateContent(prompt);
+                 result = await model.generateContent(prompt);
             }
 
-            const response = await result.response;
-            const text = response.text();
-            
+            const text = result.response.text();
             console.log(`✅ BAŞARILI! Cevap veren model: ${modelName}`);
             return text; 
 
         } catch (error) {
             console.warn(`⚠️ ${modelName} başarısız oldu. Hata:`, error.message);
             lastError = error;
-            // Bir sonraki modele geç
+            // Limit dolduysa, son mesajı ayarla
+            if (error.message?.includes('429') || error.message?.includes('Quota')) {
+                throw new Error(FALLBACK_MESSAGE);
+            }
         }
     }
 
-    throw lastError;
+    // Hiçbiri çalışmazsa en son hatayı fırlat
+    throw lastError || new Error("Sunucu, Google API ile iletişim kuramadı.");
 }
 
-// --- ROTA 1: GENEL SOHBET ---
+// --- ROTA 1: GENEL SOHBET (TEXT) ---
 app.post('/api/chat', async (req, res) => {
   try {
     const { prompt } = req.body;
     if (!prompt) return res.status(400).json({ error: 'Prompt eksik.' });
-
-    const text = await generateWithFallback(prompt);
+    
+    const text = await generateContent(prompt, false); // isVision: false
     res.json({ reply: text });
 
   } catch (error) {
-    console.error("❌ TÜM MODELLER BAŞARISIZ:", error.message);
-    
-    if (error.message?.includes('429') || error.message?.includes('Quota')) {
-        return res.json({ reply: "🌌 Evrensel hatlar şu an aşırı yoğun. (Limit Aşıldı)" });
-    }
-    res.status(500).json({ error: 'Sunucu hatası', details: error.message });
+    res.status(500).json({ error: error.message || 'Sunucu hatası' });
   }
 });
 
-// --- ROTA 2: GÖRSEL ANALİZ ---
+// --- ROTA 2: GÖRSEL ANALİZ (VISION) ---
 app.post('/api/analyze-image', async (req, res) => {
   try {
     const { prompt, imageBase64 } = req.body;
     if (!prompt || !imageBase64) return res.status(400).json({ error: 'Veri eksik.' });
 
-    // Temizlik
     const cleanBase64 = imageBase64.replace(/^data:image\/(png|jpg|jpeg|webp);base64,/, "");
-    
     const imagePart = {
       inlineData: {
         data: cleanBase64,
@@ -91,12 +88,11 @@ app.post('/api/analyze-image', async (req, res) => {
       },
     };
 
-    const text = await generateWithFallback(prompt, imagePart);
+    const text = await generateContent(prompt, true, imagePart); // isVision: true
     res.json({ reply: text });
 
   } catch (error) {
-    console.error("❌ VISION HATASI:", error.message);
-    res.status(500).json({ error: 'Görüntü analiz edilemedi.', details: error.message });
+    res.status(500).json({ error: error.message || 'Sunucu hatası' });
   }
 });
 
