@@ -11,16 +11,18 @@ app.use(express.json({ limit: '50mb' }));
 
 if (!process.env.GEMINI_API_KEY) {
     console.error("❌ HATA: GEMINI_API_KEY yok.");
+    process.exit(1); // API key yoksa server başlamasın
 }
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
+// Modeller
 const TEXT_MODELS_TO_TRY = ["gemini-2.5-flash-lite", "gemini-2.5-flash"]; 
 const VISION_MODELS_TO_TRY = ["gemini-2.5-flash-tts", "gemini-2.5-flash-lite"];
 
 const FALLBACK_MESSAGE = "🌌 Kozmik hatlar aşırı yoğun. Lütfen 5 dakika sonra tekrar dene.";
 
-// Ortak içerik üretme fonksiyonu
+// İçerik oluşturma fonksiyonu
 async function generateContent(prompt, isVision = false, imagePart = null) {
     let lastError = null;
     const modelList = isVision ? VISION_MODELS_TO_TRY : TEXT_MODELS_TO_TRY;
@@ -29,15 +31,18 @@ async function generateContent(prompt, isVision = false, imagePart = null) {
         try {
             console.log(`🔄 Denenen Model (${isVision ? 'Vision' : 'Text'}): ${modelName}...`);
             const model = genAI.getGenerativeModel({ model: modelName });
+            
             let result;
             if (isVision) {
                 result = await model.generateContent([prompt, imagePart]);
             } else {
                 result = await model.generateContent(prompt);
             }
+
             const text = result.response.text();
-            console.log(`✅ BAŞARILI! Model: ${modelName}`);
-            return text;
+            console.log(`✅ BAŞARILI! Cevap veren model: ${modelName}`);
+            return text; 
+
         } catch (error) {
             console.warn(`⚠️ ${modelName} başarısız oldu. Hata:`, error.message);
             lastError = error;
@@ -46,79 +51,64 @@ async function generateContent(prompt, isVision = false, imagePart = null) {
             }
         }
     }
+
     throw lastError || new Error("Sunucu, Google API ile iletişim kuramadı.");
 }
 
-// /api/chat endpoint'i
-app.post('/api/chat', async (req, res) => {
-  try {
-    const { prompt } = req.body;
-    if (!prompt) return res.status(400).json({ success: false, error: 'Prompt eksik.' });
-
-    const text = await generateContent(prompt, false);
-    res.json({ success: true, reply: text });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message || 'Sunucu hatası' });
-  }
-});
-
-// /api/analyze-image endpoint'i
-app.post('/api/analyze-image', async (req, res) => {
-  try {
-    const { prompt, imageBase64 } = req.body;
-    if (!prompt || !imageBase64) return res.status(400).json({ success: false, error: 'Veri eksik.' });
-
-    const cleanBase64 = imageBase64.replace(/^data:image\/(png|jpg|jpeg|webp);base64,/, "");
-    const imagePart = {
-      inlineData: {
-        data: cleanBase64,
-        mimeType: "image/jpeg",
-      },
-    };
-
-    const text = await generateContent(prompt, true, imagePart);
-    res.json({ success: true, reply: text });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message || 'Sunucu hatası' });
-  }
-});
-
-// ÖNEMLİ: /api/fal-bak endpoint'i — frontend buraya POST yapıyor
-app.post('/api/fal-bak', async (req, res) => {
-  try {
-    const { falTuru, astroType, astroData } = req.body;
-
-    if (!falTuru || !astroType || !astroData) {
-      return res.status(400).json({ success: false, error: "Eksik parametre." });
-    }
-
-    let parsedData;
+// Genel API endpoint fonksiyonu: prompt'u alır, fal türüne göre özelleştirilebilir
+async function handleFalRequest(req, res, falType) {
     try {
-      parsedData = JSON.parse(astroData);
-    } catch {
-      parsedData = astroData;
+        const { prompt, imageBase64, name1, date1, name2, date2, focus } = req.body;
+
+        if (!prompt && !name1) {
+            return res.status(400).json({ error: 'Gerekli parametreler eksik.' });
+        }
+
+        let generatedText;
+
+        if (imageBase64) {
+            // Görsel destekli fal (ör: resim analizi)
+            const cleanBase64 = imageBase64.replace(/^data:image\/(png|jpg|jpeg|webp);base64,/, "");
+            const imagePart = {
+                inlineData: {
+                    data: cleanBase64,
+                    mimeType: "image/jpeg",
+                },
+            };
+            generatedText = await generateContent(prompt, true, imagePart);
+        } else if (falType === 'ask-uyumu') {
+            // Aşk uyumu için özel JSON oluşturabiliriz
+            const astroData = JSON.stringify({ name1, date1, name2, date2, focus });
+            const fullPrompt = `${prompt}\n\n${astroData}`;
+            generatedText = await generateContent(fullPrompt, false);
+        } else {
+            // Genel metin bazlı fal, astroloji vb.
+            generatedText = await generateContent(prompt, false);
+        }
+
+        res.json({ success: true, response: generatedText });
+
+    } catch (error) {
+        console.error("API HATA:", error);
+        res.status(500).json({ success: false, error: error.message || 'Sunucu hatası' });
     }
+}
 
-    // BURADA GERÇEK İŞLEME GELECEK. ŞİMDİLİK SABİT CEVAP:
-    const fakeResponse = JSON.stringify({
-      uyum: 85,
-      yorum: "Ruh eşinizle çok güzel bir bağınız var.",
-      detaylar: {
-        karmikBag: true,
-        elementUyumu: "Ateş - Hava"
-      }
-    });
+// --- API ENDPOINTLERİ ---
 
-    // Frontend tarafında ayırıcıya göre ayırıp parse ediliyor
-    const responseText = `\`\`\`json\n${fakeResponse}\n\`\`\` ---AYIRAC--- Kozmik uyumunuz harika!`;
+app.post('/api/fal-bak', (req, res) => handleFalRequest(req, res, 'fal-bak'));
+app.post('/api/ask-uyumu', (req, res) => handleFalRequest(req, res, 'ask-uyumu'));
+app.post('/api/astroloji', (req, res) => handleFalRequest(req, res, 'astroloji'));
+app.post('/api/numeroloji', (req, res) => handleFalRequest(req, res, 'numeroloji'));
+app.post('/api/ruya', (req, res) => handleFalRequest(req, res, 'ruya'));
+app.post('/api/cin', (req, res) => handleFalRequest(req, res, 'cin'));
+app.post('/api/tarot', (req, res) => handleFalRequest(req, res, 'tarot'));
+app.post('/api/el-fali', (req, res) => handleFalRequest(req, res, 'el-fali'));
+app.post('/api/yuz-fali', (req, res) => handleFalRequest(req, res, 'yuz-fali'));
+app.post('/api/astro-calendar', (req, res) => handleFalRequest(req, res, 'astro-calendar'));
 
-    res.json({ success: true, response: responseText });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, error: "Sunucu hatası" });
-  }
-});
+// İstersen yeni endpointleri buraya ekleyebilirsin
 
 app.listen(port, () => {
-  console.log(`🚀 Kozmik Sunucu ${port} portunda çalışıyor!`);
+    console.log(`🚀 Kozmik Sunucu ${port} portunda çalışıyor!`);
 });
